@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "aufile.h"
+#include "audio.h"
 
 static int play_file(const char *fname);
 static void print_usage(const char *argv0);
@@ -34,7 +35,10 @@ static int play_file(const char *fname)
 	if(!(au = au_open(fname))) {
 		return -1;
 	}
-	/* TODO: cont */
+
+	audio_play(au->rate, au->bits, au->chan);
+	while(audio_isplaying());
+
 	au_close(au);
 	return 0;
 }

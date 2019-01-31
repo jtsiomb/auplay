@@ -9,6 +9,8 @@
 #include "dma.h"
 #include "intr.h"
 
+#define BUFSIZE			16384
+
 #define REG_MIXPORT		(base_port + 0x4)
 #define REG_MIXDATA		(base_port + 0x5)
 #define REG_RESET		(base_port + 0x6)
@@ -84,12 +86,13 @@ static const char *sbname(int ver);
 static int base_port;
 static int irq, dma_chan, dma16_chan, dsp_ver;
 static int dsp4;
-static void *buffer;
 static int xfer_mode;
+
+static void *buffer[2];
+static int wrbuf;
 
 static int isplaying;
 static int cur_bits, cur_mode;
-static int curblk;
 
 static void (INTERRUPT *prev_intr_handler)();
 
@@ -180,8 +183,8 @@ void sb_set_output_rate(int rate)
 
 void *sb_buffer(int *size)
 {
-	*size = 32768;
-	return (char*)buffer + curblk * 32768;
+	*size = BUFSIZE / 2;
+	return buffer[wrbuf];
 }
 
 void sb_start(int rate, int bits, int nchan)
@@ -190,9 +193,9 @@ void sb_start(int rate, int bits, int nchan)
 	uint32_t addr;
 	int size;
 
-	if(!buffer) {
-		/* allocate a 64k-aligned 64k buffer in low memory */
-		if(!(seg = dpmi_alloc(65536 * 2 / 16, &pmsel))) {
+	if(!buffer[0]) {
+		/* allocate a 64k-aligned buffer in low memory */
+		if(!(seg = dpmi_alloc(BUFSIZE * 2 / 16, &pmsel))) {
 			fprintf(stderr, "sb_start: failed to allocate DMA buffer\n");
 			return;
 		}
@@ -202,15 +205,16 @@ void sb_start(int rate, int bits, int nchan)
 
 		addr = ((uint32_t)(seg << 4) + 0xffff) & 0xffff0000;
 		printf("DBG aligned: %lx\n", (unsigned long)addr);
-		buffer = (void*)addr;
-	} else {
-		addr = (uint32_t)buffer;
+		buffer[0] = (void*)addr;
+		buffer[1] = (void*)(addr + BUFSIZE / 2);
+		wrbuf = 0;
 	}
 
-	if(!(size = audio_callback(buffer, 32768))) {
+	if(!(size = audio_callback(buffer[wrbuf], BUFSIZE / 2))) {
 		return;
 	}
-	curblk = 1;
+	addr = (uint32_t)buffer[wrbuf];
+	wrbuf ^= 1;
 
 	_disable();
 	if(!prev_intr_handler) {
@@ -223,15 +227,15 @@ void sb_start(int rate, int bits, int nchan)
 	unmask_irq(irq);
 
 	cur_bits = bits;
-	cur_mode = 0;	/* TODO */
+	cur_mode = bits == 8 ? 0 : DSP4_MODE_SIGNED;
 	if(nchan > 1) {
 		cur_mode |= DSP4_MODE_STEREO;
 	}
 
 	write_dsp(DSP_ENABLE_OUTPUT);
-	dma_out(dma_chan, addr, size, DMA_SINGLE);
+	dma_out(bits == 8 ? dma_chan : dma16_chan, addr, size, DMA_SINGLE);
 	sb_set_output_rate(rate);
-	start_dsp4(cur_bits, cur_mode, size);
+	start_dsp4(cur_bits, cur_mode, bits == 8 ? size : size / 2);
 	isplaying = 1;
 }
 
@@ -296,20 +300,30 @@ void sb_volume(int vol)
 static void INTERRUPT intr_handler()
 {
 	int size;
-	void *bptr = (unsigned char*)buffer + curblk * 32768;
+	void *bptr = buffer[wrbuf];
+	uint32_t addr = (uint32_t)bptr;
 
-	curblk = (curblk + 1) & 1;
+	wrbuf ^= 1;
 
 	/* ask for more data */
-	if(!(size = audio_callback(bptr, 32768))) {
+	if(!(size = audio_callback(bptr, BUFSIZE / 2))) {
 		sb_stop();
 	} else {
-		dma_out(dma_chan, (uint32_t)bptr, size, DMA_SINGLE);
-		start_dsp4(cur_bits, cur_mode, size);
+		if(cur_bits == 8) {
+			dma_out(dma_chan, addr, size, DMA_SINGLE);
+			start_dsp4(cur_bits, cur_mode, size);
+		} else {
+			dma_out(dma16_chan, addr, size, DMA_SINGLE);
+			start_dsp4(cur_bits, cur_mode, size / 2);
+		}
 	}
 
 	/* acknowledge the interrupt */
-	inp(REG_INTACK);
+	if(cur_bits == 8) {
+		inp(REG_INTACK);
+	} else {
+		inp(REG_INT16ACK);
+	}
 
 	if(irq > 7) {
 		outp(PIC2_CMD, OCW2_EOI);
