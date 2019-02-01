@@ -14,6 +14,7 @@ void audio_resume(void);
 void audio_stop(void);
 int audio_isplaying(void);
 
+/* audio volume: 0-255 */
 void audio_volume(int vol);
 
 #endif	/* AUDIO_H_ */
