@@ -66,6 +66,7 @@ int au_open_wav(struct au_file *au)
 	au->rate = fmt.rate;
 	au->bits = fmt.sample_bytes * 8;
 	au->chan = fmt.nchan;
+	au->size = pb->size;
 	au->data = pb;
 
 	au->close = close_wav;

@@ -86,13 +86,12 @@ static const char *sbname(int ver);
 static int base_port;
 static int irq, dma_chan, dma16_chan, dsp_ver;
 static int dsp4;
-static int xfer_mode;
 
 static void *buffer[2];
-static int wrbuf;
+static volatile int wrbuf;
 
-static int isplaying;
-static int cur_bits, cur_mode;
+static volatile int isplaying;
+static int cur_bits, cur_mode, auto_init;
 
 static void (INTERRUPT *prev_intr_handler)();
 
@@ -190,11 +189,11 @@ void *sb_buffer(int *size)
 void sb_start(int rate, int bits, int nchan)
 {
 	uint16_t seg, pmsel;
-	uint32_t addr;
-	int size;
+	uint32_t addr, next64k;
+	int size, num_samples;
 
-	if(!buffer[0]) {
-		/* allocate a 64k-aligned buffer in low memory */
+	if(!buffer[1]) {
+		/* allocate a buffer in low memory that doesn't cross 64k boundaries */
 		if(!(seg = dpmi_alloc(BUFSIZE * 2 / 16, &pmsel))) {
 			fprintf(stderr, "sb_start: failed to allocate DMA buffer\n");
 			return;
@@ -203,18 +202,34 @@ void sb_start(int rate, int bits, int nchan)
 		printf("DBG allocated seg: %x, addr: %lx\n", (unsigned int)seg,
 				(unsigned long)seg << 4);
 
-		addr = ((uint32_t)(seg << 4) + 0xffff) & 0xffff0000;
-		printf("DBG aligned: %lx\n", (unsigned long)addr);
+		addr = (uint32_t)seg << 4;
+		next64k = (addr + 0x10000) & 0xffff0000;
+		if(next64k - addr < BUFSIZE) {
+			addr = next64k;
+		}
+
+		printf("DBG aligned: %lx (mid: %lx)\n", (unsigned long)addr, (unsigned long)(addr + BUFSIZE / 2));
 		buffer[0] = (void*)addr;
 		buffer[1] = (void*)(addr + BUFSIZE / 2);
 		wrbuf = 0;
 	}
 
-	if(!(size = audio_callback(buffer[wrbuf], BUFSIZE / 2))) {
+	/* Auto-init playback mode:
+	 * fill the whole buffer with data, program the DMA for BUFSIZE transfer,
+	 * and program the DSP for BUFSIZE/2 transfer. We'll get an interrupt in the
+	 * middle, while the DSP uses the upper half, and we'll refill the bottom half.
+	 * Then continue ping-ponging the two halves of the buffer until we run out of
+	 * data.
+	 */
+	auto_init = 1;
+
+	/* TODO: if size <= BUFSIZE, do a single transfer instead */
+	wrbuf = 0;
+	if(!(size = audio_callback(buffer[wrbuf], BUFSIZE))) {
 		return;
 	}
 	addr = (uint32_t)buffer[wrbuf];
-	wrbuf ^= 1;
+	num_samples = bits == 8 ? size : size / 2;
 
 	_disable();
 	if(!prev_intr_handler) {
@@ -233,18 +248,16 @@ void sb_start(int rate, int bits, int nchan)
 	}
 
 	write_dsp(DSP_ENABLE_OUTPUT);
-	dma_out(bits == 8 ? dma_chan : dma16_chan, addr, size, DMA_SINGLE);
+	dma_out(cur_bits == 8 ? dma_chan : dma16_chan, addr, BUFSIZE, DMA_SINGLE | DMA_AUTO);
 	sb_set_output_rate(rate);
-	start_dsp4(cur_bits, cur_mode, bits == 8 ? size : size / 2);
+	start_dsp4(cur_bits, cur_mode, num_samples / 2);
 	isplaying = 1;
 }
 
 static void start_dsp4(int bits, unsigned int mode, int num_samples)
 {
 	unsigned char cmd = bits == 8 ? DSP4_START_DMA8 : DSP4_START_DMA16;
-	assert(bits == 8 || bits == 16);
-
-	/*cmd |= DSP4_AUTO | DSP4_FIFO;*/
+	cmd |= DSP4_AUTO | DSP4_FIFO;
 
 	/* program the DSP to start the DMA transfer */
 	write_dsp(cmd);
@@ -280,10 +293,7 @@ void sb_stop(void)
 	_dos_setvect(IRQ_TO_INTR(irq), prev_intr_handler);
 	_enable();
 
-	/* no need to stop anything if we're in single-cycle mode */
-	if(cur_mode & DSP4_AUTO) {
-		write_dsp(cur_bits == 8 ? DSP_END_DMA8 : DSP_END_DMA16);
-	}
+	write_dsp(cur_bits == 8 ? DSP_END_DMA8 : DSP_END_DMA16);
 	isplaying = 0;
 }
 
@@ -308,21 +318,20 @@ static void INTERRUPT intr_handler()
 	/* ask for more data */
 	if(!(size = audio_callback(bptr, BUFSIZE / 2))) {
 		sb_stop();
-	} else {
-		if(cur_bits == 8) {
-			dma_out(dma_chan, addr, size, DMA_SINGLE);
-			start_dsp4(cur_bits, cur_mode, size);
-		} else {
-			dma_out(dma16_chan, addr, size, DMA_SINGLE);
-			start_dsp4(cur_bits, cur_mode, size / 2);
-		}
 	}
 
 	/* acknowledge the interrupt */
 	if(cur_bits == 8) {
 		inp(REG_INTACK);
 	} else {
-		inp(REG_INT16ACK);
+		/*
+		unsigned char istat;
+		outp(REG_MIXPORT, 0x82);
+		istat = inp(REG_MIXDATA);
+		if(istat & 2) {
+		*/
+			inp(REG_INT16ACK);
+		//}
 	}
 
 	if(irq > 7) {

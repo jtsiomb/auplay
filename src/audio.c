@@ -17,7 +17,7 @@ static struct audrv drv;
 static audio_callback_func cbfunc;
 static void *cbcls;
 
-void audio_init(void)
+int audio_init(void)
 {
 	if(sb_detect()) {
 		drv.get_buffer = sb_buffer;
@@ -27,10 +27,11 @@ void audio_init(void)
 		drv.stop = sb_stop;
 		drv.volume = sb_volume;
 		drv.isplaying = sb_isplaying;
-		return;
+		return 0;
 	}
 
-	printf("No supported audio device detected\n");
+	fprintf(stderr, "No supported audio device detected\n");
+	return -1;
 }
 
 void audio_set_callback(audio_callback_func func, void *cls)
@@ -49,6 +50,7 @@ int audio_callback(void *buf, int sz)
 
 void audio_play(int rate, int bits, int nchan)
 {
+	printf("play %d samples/s, %d bits, %s\n", rate, bits, nchan == 1 ? "mono" : "stereo");
 	drv.start(rate, bits, nchan);
 }
 

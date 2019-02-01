@@ -3,7 +3,7 @@
 
 typedef int (*audio_callback_func)(void *buffer, int size, void *cls);
 
-void audio_init(void);
+int audio_init(void);
 
 void audio_set_callback(audio_callback_func func, void *cls);
 int audio_callback(void *buf, int sz);

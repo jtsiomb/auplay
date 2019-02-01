@@ -4,6 +4,7 @@
 struct au_file {
 	int rate, bits, chan;
 	void *data;
+	unsigned long size;
 
 	FILE *fp;
 	void (*close)(struct au_file*);
