@@ -63,6 +63,11 @@
 #define MIX_SB16_VOICE_R	0x33
 #define MIX_SB16_IRQ_SEL	0x80
 #define MIX_SB16_DMA_SEL	0x81
+#define MIX_SB16_INTSTAT	0x82
+
+#define INTSTAT_DMA8		0x01
+#define INTSTAT_DMA16		0x02
+#define INTSTAT_MPU401		0x04
 
 #define VER_MAJOR(x)	((x) >> 8)
 #define VER_MINOR(x)	((x) & 0xff)
@@ -425,14 +430,10 @@ static void INTERRUPT intr_handler()
 	if(cur_bits == 8) {
 		inp(REG_INTACK);
 	} else {
-		/*
-		unsigned char istat;
-		outp(REG_MIXPORT, 0x82);
-		istat = inp(REG_MIXDATA);
-		if(istat & 2) {
-		*/
+		unsigned char istat = read_mix(MIX_SB16_INTSTAT);
+		if(istat & INTSTAT_DMA16) {
 			inp(REG_INT16ACK);
-		//}
+		}
 	}
 
 	if(irq > 7) {
