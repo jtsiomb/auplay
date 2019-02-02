@@ -334,11 +334,11 @@ static void setvolume(int ctl, int vol)
 		/* DSP 4.x - SB16 */
 		val = vol & 0xf8;
 		if(ctl == AUDIO_PCM) {
-			write_mix(MIX_SB16_VOICE_L, vol);
-			write_mix(MIX_SB16_VOICE_R, vol);
+			write_mix(MIX_SB16_VOICE_L, val);
+			write_mix(MIX_SB16_VOICE_R, val);
 		} else {
-			write_mix(MIX_SB16_MASTER_L, vol);
-			write_mix(MIX_SB16_MASTER_R, vol);
+			write_mix(MIX_SB16_MASTER_L, val);
+			write_mix(MIX_SB16_MASTER_R, val);
 		}
 
 	} else if(VER_MAJOR(dsp_ver) >= 3) {
@@ -381,9 +381,9 @@ static int getvolume(int ctl)
 		}
 
 		val = read_mix(lreg);
-		left = (val & 0xf8) | ((val >> 3) & 7);	/* duplicate last 3 bits */
+		left = (val & 0xf8) | (val >> 5);
 		val = read_mix(rreg);
-		right = (val & 0xf8) | ((val >> 3) & 7);
+		right = (val & 0xf8) | (val >> 5);
 
 	} else if(VER_MAJOR(dsp_ver) >= 3) {
 		/* DSP 3.x - SBPro */
@@ -454,7 +454,7 @@ static unsigned char read_dsp(void)
 	return inp(REG_RDATA);
 }
 
-static void write_mix(unsigned char val, int reg)
+static void write_mix(int reg, unsigned char val)
 {
 	outp(REG_MIXPORT, reg);
 	outp(REG_MIXDATA, val);
@@ -492,7 +492,7 @@ static int dsp4_detect_irq(void)
 	}
 	if(!irq) {
 		/* try to force IRQ 5 */
-		write_mix(2, MIX_SB16_IRQ_SEL);	/* bit1 selects irq 5 */
+		write_mix(MIX_SB16_IRQ_SEL, 2);	/* bit1 selects irq 5 */
 
 		/* re-read to verify */
 		irqsel = read_mix(MIX_SB16_IRQ_SEL);
@@ -535,7 +535,7 @@ static int dsp4_detect_dma(void)
 	}
 
 	if(dma_chan == -1 || dma16_chan == -1) {
-		write_mix(dmasel, MIX_SB16_DMA_SEL);
+		write_mix(MIX_SB16_DMA_SEL, dmasel);
 
 		/* re-read to verify */
 		tmp = read_mix(MIX_SB16_DMA_SEL);
