@@ -17,7 +17,7 @@ static int quit;
 
 int main(int argc, char **argv)
 {
-	int i;
+	int i, vol;
 
 	if(audio_init() == -1) {
 		return 1;
@@ -27,7 +27,14 @@ int main(int argc, char **argv)
 
 	for(i=1; i<argc; i++) {
 		if(argv[i][0] == '-') {
-			if(strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "-help") == 0) {
+			if(strcmp(argv[i], "-v") == 0 || strcmp(argv[i], "-volume") == 0) {
+				if(!argv[++i] || (vol = atoi(argv[i])) <= 0 || vol > 100) {
+					fprintf(stderr, "%s must be followed by a number 1-100\n", argv[-1]);
+					return 1;
+				}
+				audio_setvolume(AUDIO_MASTER, vol * 255 / 100);
+
+			} else if(strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "-help") == 0) {
 				print_usage(argv[0]);
 				return 0;
 			} else {
@@ -168,5 +175,6 @@ static void print_usage(const char *argv0)
 {
 	printf("Usage: %s [options] <file1> <file2> ... <filen>\n", argv0);
 	printf("options:\n");
+	printf(" -v,-volume <percent>: set audio volume (1-100)\n");
 	printf(" -h,-help: print usage and exit\n");
 }
