@@ -4,7 +4,7 @@
 #include <dos.h>
 #include <conio.h>
 #include "audio.h"
-#include "au_sb.h"
+#include "audrv.h"
 #include "dpmi.h"
 #include "dma.h"
 #include "intr.h"
@@ -70,6 +70,18 @@
 /* delay for about 1us */
 #define iodelay()	outp(0x80, 0)
 
+
+static int reset_dsp(void);
+static void *sb_buffer(int *size);
+static void set_output_rate(int rate);
+static void start(int rate, int bits, int nchan);
+static void pause(void);
+static void cont(void);
+static void stop(void);
+static int isplaying(void);
+static void setvolume(int ctl, int vol);
+static int getvolume(int ctl);
+
 static void INTERRUPT intr_handler();
 static void start_dsp4(int bits, unsigned int mode, int num_samples);
 static void start_dsp(int nchan, int num_samples);
@@ -83,6 +95,18 @@ static int dsp4_detect_dma(void);
 static void print_dsp_info(void);
 static const char *sbname(int ver);
 
+
+static const struct audrv sbdrv = {
+	start,
+	pause,
+	cont,
+	stop,
+	setvolume,
+	getvolume,
+	isplaying
+};
+
+
 static int base_port;
 static int irq, dma_chan, dma16_chan, dsp_ver;
 static int dsp4;
@@ -90,13 +114,13 @@ static int dsp4;
 static void *buffer[2];
 static volatile int wrbuf;
 
-static volatile int isplaying;
+static volatile int playing;
 static int cur_bits, cur_mode, auto_init;
 
 static void (INTERRUPT *prev_intr_handler)();
 
 
-int sb_detect(void)
+int sb_detect(struct audrv *drv)
 {
 	int i;
 	char *env;
@@ -104,10 +128,11 @@ int sb_detect(void)
 	if((env = getenv("BLASTER"))) {
 		dma16_chan = -1;
 		if(sscanf(env, "A%x I%d D%d H%d", &base_port, &irq, &dma_chan, &dma16_chan) >= 3) {
-			if(sb_reset_dsp() == 0) {
+			if(reset_dsp() == 0) {
 				dsp_ver = get_dsp_version();
 				dsp4 = VER_MAJOR(dsp_ver) >= 4 ? 1 : 0;
 				print_dsp_info();
+				*drv = sbdrv;
 				return 1;
 			}
 		} else {
@@ -117,7 +142,7 @@ int sb_detect(void)
 
 	for(i=0; i<6; i++) {
 		base_port = 0x200 + ((i + 1) << 4);
-		if(sb_reset_dsp() == 0) {
+		if(reset_dsp() == 0) {
 			dsp_ver = get_dsp_version();
 			dsp4 = VER_MAJOR(dsp_ver) >= 4 ? 1 : 0;
 
@@ -140,6 +165,7 @@ int sb_detect(void)
 				printf("sb_detect: old sound blaster dsp. assuming: irq 5, dma 1\n");
 			}
 			print_dsp_info();
+			*drv = sbdrv;
 
 			return 1;
 		}
@@ -148,7 +174,7 @@ int sb_detect(void)
 	return 0;
 }
 
-int sb_reset_dsp(void)
+static int reset_dsp(void)
 {
 	int i;
 
@@ -167,7 +193,7 @@ int sb_reset_dsp(void)
 	return -1;
 }
 
-void sb_set_output_rate(int rate)
+static void set_output_rate(int rate)
 {
 	if(dsp4) {
 		write_dsp(DSP4_OUT_RATE);
@@ -180,13 +206,7 @@ void sb_set_output_rate(int rate)
 	}
 }
 
-void *sb_buffer(int *size)
-{
-	*size = BUFSIZE / 2;
-	return buffer[wrbuf];
-}
-
-void sb_start(int rate, int bits, int nchan)
+static void start(int rate, int bits, int nchan)
 {
 	uint16_t seg, pmsel;
 	uint32_t addr, next64k;
@@ -195,7 +215,7 @@ void sb_start(int rate, int bits, int nchan)
 	if(!buffer[1]) {
 		/* allocate a buffer in low memory that doesn't cross 64k boundaries */
 		if(!(seg = dpmi_alloc(BUFSIZE * 2 / 16, &pmsel))) {
-			fprintf(stderr, "sb_start: failed to allocate DMA buffer\n");
+			fprintf(stderr, "SB start: failed to allocate DMA buffer\n");
 			return;
 		}
 
@@ -235,7 +255,6 @@ void sb_start(int rate, int bits, int nchan)
 	if(!prev_intr_handler) {
 		prev_intr_handler = _dos_getvect(IRQ_TO_INTR(irq));
 	}
-	printf("setting interrupt vector: %d\n", IRQ_TO_INTR(irq));
 	_dos_setvect(IRQ_TO_INTR(irq), intr_handler);
 	_enable();
 
@@ -249,9 +268,9 @@ void sb_start(int rate, int bits, int nchan)
 
 	write_dsp(DSP_ENABLE_OUTPUT);
 	dma_out(cur_bits == 8 ? dma_chan : dma16_chan, addr, BUFSIZE, DMA_SINGLE | DMA_AUTO);
-	sb_set_output_rate(rate);
+	set_output_rate(rate);
 	start_dsp4(cur_bits, cur_mode, num_samples / 2);
-	isplaying = 1;
+	playing = 1;
 }
 
 static void start_dsp4(int bits, unsigned int mode, int num_samples)
@@ -273,17 +292,17 @@ static void start_dsp(int nchan, int num_samples)
 	/* TODO */
 }
 
-void sb_pause(void)
+static void pause(void)
 {
 	write_dsp(cur_bits == 8 ? DSP_PAUSE_DMA8 : DSP_PAUSE_DMA16);
 }
 
-void sb_continue(void)
+static void cont(void)
 {
 	write_dsp(cur_bits == 8 ? DSP_CONT_DMA8 : DSP_CONT_DMA16);
 }
 
-void sb_stop(void)
+static void stop(void)
 {
 	write_dsp(DSP_DISABLE_OUTPUT);
 
@@ -294,17 +313,99 @@ void sb_stop(void)
 	_enable();
 
 	write_dsp(cur_bits == 8 ? DSP_END_DMA8 : DSP_END_DMA16);
-	isplaying = 0;
+	playing = 0;
 }
 
-int sb_isplaying(void)
+static int isplaying(void)
 {
-	return isplaying;
+	return playing;
 }
 
-void sb_volume(int vol)
+static void setvolume(int ctl, int vol)
 {
-	/* TODO */
+	unsigned char val;
+
+	if(VER_MAJOR(dsp_ver) >= 4) {
+		/* DSP 4.x - SB16 */
+		val = vol & 0xf8;
+		if(ctl == AUDIO_PCM) {
+			write_mix(MIX_SB16_VOICE_L, vol);
+			write_mix(MIX_SB16_VOICE_R, vol);
+		} else {
+			write_mix(MIX_SB16_MASTER_L, vol);
+			write_mix(MIX_SB16_MASTER_R, vol);
+		}
+
+	} else if(VER_MAJOR(dsp_ver) >= 3) {
+		/* DSP 3.x - SBPro */
+		val = vol & 0xe0;
+		val |= val >> 4;
+
+		if(ctl == AUDIO_PCM) {
+			write_mix(MIX_SBPRO_VOICE, val);
+		} else {
+			write_mix(MIX_SBPRO_MASTER, val);
+		}
+
+	} else {
+		/* DSP 2.x - SB 2.0 */
+		if(ctl == AUDIO_PCM) {
+			val = (vol >> 5) & 6;
+			write_mix(MIX_VOICE, val);
+		} else {
+			val = (vol >> 4) & 0xe;
+			write_mix(MIX_MASTER, val);
+		}
+	}
+}
+
+static int getvolume(int ctl)
+{
+	int left, right;
+	unsigned char val;
+
+	if(VER_MAJOR(dsp_ver) >= 4) {
+		/* DSP 4.x - SB16 */
+		int lreg, rreg;
+		if(ctl == AUDIO_PCM) {
+			lreg = MIX_SB16_VOICE_L;
+			rreg = MIX_SB16_VOICE_R;
+		} else {	/* MASTER or DEFAULT */
+			lreg = MIX_SB16_MASTER_L;
+			rreg = MIX_SB16_MASTER_R;
+		}
+
+		val = read_mix(lreg);
+		left = (val & 0xf8) | ((val >> 3) & 7);	/* duplicate last 3 bits */
+		val = read_mix(rreg);
+		right = (val & 0xf8) | ((val >> 3) & 7);
+
+	} else if(VER_MAJOR(dsp_ver) >= 3) {
+		/* DSP 3.x - SBPro */
+		val = read_mix(ctl == AUDIO_PCM ? MIX_SBPRO_VOICE : MIX_SBPRO_MASTER);
+
+		/* left is top 3 bits, duplicate twice(-ish) */
+		left = (val & 0xe0) | ((val >> 3) & 0x1c) | (val >> 6);
+		/* right is top 3 bits of the lower nibble */
+		right = (val << 4) | ((val << 1) & 0x1c) | ((val >> 2) & 3);
+
+	} else {
+		int volume;
+
+		/* DSP 2.x - SB 2.0 */
+		if(ctl == AUDIO_PCM) {
+			/* voice is in bits 1 and 2 */
+			val = read_mix(MIX_VOICE);
+			volume = (val << 5) | ((val << 3) & 0x30) | ((val << 1) & 0xc) | ((val >> 1) & 3);
+		} else {
+			/* master is in the 3 top bits of the lower nibble */
+			val = read_mix(MIX_MASTER);
+			volume = (val << 4) | ((val << 1) & 0x1c) | ((val >> 2) & 3);
+		}
+		return volume;
+	}
+
+	return (left + right) >> 1;
 }
 
 static void INTERRUPT intr_handler()
@@ -317,7 +418,7 @@ static void INTERRUPT intr_handler()
 
 	/* ask for more data */
 	if(!(size = audio_callback(bptr, BUFSIZE / 2))) {
-		sb_stop();
+		stop();
 	}
 
 	/* acknowledge the interrupt */
@@ -449,9 +550,6 @@ static int dsp4_detect_dma(void)
 
 static void print_dsp_info(void)
 {
-	int master[2], voice[2];
-	int val;
-
 	printf("sb_detect: %s (DSP v%d.%02d) port %xh, irq %d", sbname(dsp_ver),
 			VER_MAJOR(dsp_ver), VER_MINOR(dsp_ver), base_port, irq);
 	if(VER_MAJOR(dsp_ver) >= 4) {
@@ -459,27 +557,6 @@ static void print_dsp_info(void)
 	} else {
 		printf(" dma %d\n", dma_chan);
 	}
-
-	if(VER_MAJOR(dsp_ver) >= 4) {
-		master[0] = 100 * (int)(read_mix(MIX_SB16_MASTER_L) >> 3) / 31;
-		master[1] = 100 * (int)(read_mix(MIX_SB16_MASTER_R) >> 3) / 31;
-		voice[0] = 100 * (int)(read_mix(MIX_SB16_VOICE_L) >> 3) / 31;
-		voice[1] = 100 * (int)(read_mix(MIX_SB16_VOICE_R) >> 3) / 31;
-	} else if(VER_MAJOR(dsp_ver) >= 3) {
-		val = read_mix(MIX_SBPRO_MASTER);
-		master[0] = 100 * (val >> 5) / 7;
-		master[1] = 100 * ((val >> 1) & 7) / 7;
-		val = read_mix(MIX_SBPRO_VOICE);
-		voice[0] = 100 * (val >> 5) / 7;
-		voice[1] = 100 * ((val >> 1) & 7) / 7;
-	} else {
-		val = read_mix(MIX_MASTER);
-		master[0] = master[1] = 100 * ((val >> 1) & 7) / 7;
-		val = read_mix(MIX_VOICE);
-		voice[0] = voice[1] = 100 * ((val >> 1) & 3) / 3;
-	}
-	printf("  mixer: master(%d|%d) voice(%d|%d)\n", master[0], master[1],
-			voice[0], voice[1]);
 }
 
 #define V(maj, min)	(((maj) << 8) | (min))

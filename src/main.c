@@ -22,7 +22,8 @@ int main(int argc, char **argv)
 	if(audio_init() == -1) {
 		return 1;
 	}
-	audio_volume(vol);
+	audio_setvolume(AUDIO_MASTER, 255);
+	audio_setvolume(AUDIO_PCM, 255);
 
 	for(i=1; i<argc; i++) {
 		if(argv[i][0] == '-') {
@@ -47,7 +48,7 @@ static int dbg_cur_offs;
 static int play_file(const char *fname)
 {
 	struct au_file *au;
-	int paused = 0;
+	int paused = 0, muted = 0;
 	unsigned long prev;
 
 	if(!(au = au_open(fname))) {
@@ -92,15 +93,24 @@ static int play_file(const char *fname)
 			case '=':
 				vol += 32;
 				if(vol > 255) vol = 255;
-				audio_volume(vol);
+				audio_setvolume(AUDIO_DEFAULT, vol);
 				printf("volume: %d%%\n", 101 * vol / 256);
 				break;
 
 			case '-':
 				vol -= 32;
 				if(vol < 0) vol = 0;
-				audio_volume(vol);
+				audio_setvolume(AUDIO_DEFAULT, vol);
 				printf("volume: %d%%\n", 101 * vol / 256);
+				break;
+
+			case 'm':
+				muted = !muted;
+				if(muted) {
+					audio_setvolume(AUDIO_DEFAULT, 0);
+				} else {
+					audio_setvolume(AUDIO_DEFAULT, vol);
+				}
 				break;
 
 			default:

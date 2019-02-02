@@ -1,32 +1,19 @@
 #include <stdio.h>
 #include "audio.h"
-#include "au_sb.h"
-
-struct audrv {
-	void *(*get_buffer)(int *size);
-	void (*start)(int rate, int bits, int nchan);
-	void (*pause)(void);
-	void (*cont)(void);
-	void (*stop)(void);
-	void (*volume)(int vol);
-	int (*isplaying)(void);
-};
+#include "audrv.h"
 
 static struct audrv drv;
 
 static audio_callback_func cbfunc;
 static void *cbcls;
 
+/* driver detect/init functions are defined in their respective source files */
+int sb_detect(struct audrv *drv);
+
+
 int audio_init(void)
 {
-	if(sb_detect()) {
-		drv.get_buffer = sb_buffer;
-		drv.start = sb_start;
-		drv.pause = sb_pause;
-		drv.cont = sb_continue;
-		drv.stop = sb_stop;
-		drv.volume = sb_volume;
-		drv.isplaying = sb_isplaying;
+	if(sb_detect(&drv)) {
 		return 0;
 	}
 
@@ -69,9 +56,14 @@ void audio_stop(void)
 	drv.stop();
 }
 
-void audio_volume(int vol)
+void audio_setvolume(int ctl, int vol)
 {
-	drv.volume(vol);
+	drv.setvolume(ctl, vol);
+}
+
+int audio_getvolume(int ctl)
+{
+	return drv.getvolume(ctl);
 }
 
 int audio_isplaying(void)
