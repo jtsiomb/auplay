@@ -92,7 +92,7 @@ static void start_dsp4(int bits, unsigned int mode, int num_samples);
 static void start_dsp(int nchan, int num_samples);
 static void write_dsp(unsigned char val);
 static unsigned char read_dsp(void);
-static void write_mix(unsigned char val, int reg);
+static void write_mix(int reg, unsigned char val);
 static unsigned char read_mix(int reg);
 static int get_dsp_version(void);
 static int dsp4_detect_irq(void);

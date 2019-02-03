@@ -1,20 +1,17 @@
-src = $(wildcard src/*.c)
-
-ifeq ($(findstring COMMAND.COM, $(SHELL)), COMMAND.COM)
-	hostsys = dos
-	obj = $(subst /,\,$(src:.c=.obj))
-	RM = del
-else
-	hostsys = unix
-	obj = $(src:.c=.obj)
-endif
+obj = main.obj audio.obj aufile.obj auwav.obj dma.obj au_sb.obj dpmi.obj
 bin = auplay.exe
 
 opt = -5
-dbg = -d1
+dbg = -d3
 def = -dLITTLEENDIAN
 
 incpath = -Isrc
+
+!ifdef __UNIX__
+RM = rm -f
+!else
+RM = del
+!endif
 
 AS = nasm
 CC = wcc386
@@ -24,19 +21,20 @@ LDFLAGS = option map
 LD = wlink
 
 $(bin): $(obj)
-	$(file >objlist.lnk,$(obj))
+	%write objlist.lnk $(obj)
 	$(LD) debug all name $@ system dos4g file { @objlist } $(LDFLAGS)
 
-%.obj: %.c
-	$(CC) -fo=$@ $(CFLAGS) $<
+.c: src
+.asm: src
 
-%.obj: %.asm
-	$(AS) $(ASFLAGS) -o $@ $<
+.c.obj: .autodepend
+	$(CC) -fo=$@ $(CFLAGS) $[*
 
-clean:
-	$(RM) $(obj)
+.asm.obj:
+	$(AS) $(ASFLAGS) -o $@ $[*.asm
+
+clean: .symbolic
 	$(RM) *.obj
-	$(RM) src\*.obj
+	$(RM) *.lnk
+	$(RM) *.map
 	$(RM) $(bin)
-	$(RM) objlist.lnk
-	$(RM) auplay.map

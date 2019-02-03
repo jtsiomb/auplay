@@ -1,59 +1,6 @@
 #include <conio.h>
 #include "dma.h"
 
-/* 8bit DMA ports */
-#define DMA_0_ADDR	0x00
-#define DMA_0_COUNT	0x01
-#define DMA_1_ADDR	0x02
-#define DMA_1_COUNT	0x03
-#define DMA_2_ADDR	0x04
-#define DMA_2_COUNT	0x05
-#define DMA_3_ADDR	0x06
-#define DMA_3_COUNT	0x07
-/* 16bit DMA ports */
-#define DMA_4_ADDR	0xc0
-#define DMA_4_COUNT	0xc2
-#define DMA_5_ADDR	0xc4
-#define DMA_5_COUNT	0xc6
-#define DMA_6_ADDR	0xc8
-#define DMA_6_COUNT	0xca
-#define DMA_7_ADDR	0xcc
-#define DMA_7_COUNT	0xce
-
-#define DMA_ADDR(c)	\
-	((c < 4) ? DMA_0_ADDR + ((c) << 1) : (DMA_4_ADDR + ((c) << 2)))
-#define DMA_COUNT(c) \
-	((c < 4) ? DMA_0_COUNT + ((c) << 1) : (DMA_4_COUNT + ((c) << 2)))
-
-#define DMA8_MASK			0x0a
-#define DMA8_MODE			0x0b
-#define DMA8_CLR_FLIPFLOP	0x0c
-#define DMA8_RESET			0x0d
-#define DMA8_MASK_RST		0x0e
-#define DMA8_RMASK			0x0f
-#define DMA16_MASK			0xd4
-#define DMA16_MODE			0xd6
-#define DMA16_CLR_FLIPFLOP	0xd8
-#define DMA16_RESET			0xda
-#define DMA16_MASK_RST		0xdc
-#define DMA16_RMASK		0xde
-
-#define DMA_MASK(c)	((c) < 4 ? DMA8_MASK : DMA16_MASK)
-#define DMA_MODE(c)	((c) < 4 ? DMA8_MODE : DMA16_MODE)
-#define DMA_CLR_FLIPFLOP(c)	((c) < 4 ? DMA8_CLR_FLIPFLOP : DMA16_CLR_FLIPFLOP)
-#define DMA_RESET(c)	((c) < 4 ? DMA8_RESET : DMA16_RESET)
-#define DMA_MASK_RST(c)	((c) < 4 ? DMA8_MASK_RST : DMA16_MASK_RST)
-#define DMA_RMASK(c)	((c) < 4 ? DMA8_RMASK : DMA16_RMASK)
-
-#define DMA_0_PAGE		0x87
-#define DMA_1_PAGE		0x83
-#define DMA_2_PAGE		0x81
-#define DMA_3_PAGE		0x82
-#define DMA_4_PAGE		0x8f
-#define DMA_5_PAGE		0x8b
-#define DMA_6_PAGE		0x89
-#define DMA_7_PAGE		0x8a
-
 #define MODE_CHAN(x)	((x) & 3)
 #define MODE_WRITE		0x04
 #define MODE_READ		0x08
@@ -74,10 +21,13 @@ static void dma_io(int chan, uint32_t phyaddr, int size, unsigned int flags, uns
 static __inline void mask(int chan);
 static __inline void unmask(int chan);
 
-static int page_port[] = {
-	DMA_0_PAGE, DMA_1_PAGE, DMA_2_PAGE, DMA_3_PAGE,
-	DMA_4_PAGE, DMA_5_PAGE, DMA_6_PAGE, DMA_7_PAGE
-};
+/* DMA register I/O ports for all channels */
+static const int addr_port[] = { 0x00, 0x02, 0x04, 0x06, 0xc0, 0xc4, 0xc8, 0xcc };
+static const int count_port[] = { 0x01, 0x03, 0x05, 0x07, 0xc2, 0xc6, 0xca, 0xce };
+static const int page_port[] = { 0x87, 0x83, 0x81, 0x82, 0x8f, 0x8b, 0x89, 0x8a };
+static const int mask_port[] = { 0x0a, 0x0a, 0x0a, 0x0a, 0xd4, 0xd4, 0xd4, 0xd4 };
+static const int mode_port[] = { 0x0b, 0x0b, 0x0b, 0x0b, 0xd6, 0xd6, 0xd6, 0xd6 };
+static const int clrff_port[] = { 0x0c, 0x0c, 0x0c, 0x0c, 0xd8, 0xd8, 0xd8, 0xd8 };
 
 void dma_out(int chan, uint32_t phyaddr, int size, unsigned int flags)
 {
@@ -92,42 +42,38 @@ void dma_in(int chan, uint32_t phyaddr, int size, unsigned int flags)
 static void dma_io(int chan, uint32_t phyaddr, int size, unsigned int flags, unsigned int dir)
 {
 	unsigned int mode;
-	int addr_port, count_port;
-
-	addr_port = DMA_ADDR(chan);
-	count_port = DMA_COUNT(chan);
 
 	mask(chan);
-	outp(DMA_CLR_FLIPFLOP(chan), 0);
+	outp(clrff_port[chan], 0);
 
 	/* first 2 bits of flags correspond to the mode bits 6,7 */
 	mode = ((flags & 3) << 6) | dir | MODE_CHAN(chan);
 	if(flags & DMA_DECR) mode |= MODE_DECR;
 	if(flags & DMA_AUTO) mode |= MODE_AUTO;
-	outp(DMA_MODE(chan), mode);
+	outp(mode_port[chan], mode);
 
 	if(IS_16BIT(chan)) {
 		phyaddr >>= 1;
 		size >>= 1;
 	}
 
-	outp(addr_port, phyaddr & 0xff);
-	outp(addr_port, (phyaddr >> 8) & 0xff);
+	outp(addr_port[chan], phyaddr & 0xff);
+	outp(addr_port[chan], (phyaddr >> 8) & 0xff);
 	outp(page_port[chan], (phyaddr >> 16) & 0xff);
 
 	size--;
-	outp(count_port, size & 0xff);
-	outp(count_port, (size >> 8) & 0xff);
+	outp(count_port[chan], size & 0xff);
+	outp(count_port[chan], (size >> 8) & 0xff);
 
 	unmask(chan);
 }
 
 static __inline void mask(int chan)
 {
-	outp(DMA_MASK(chan), MASK_CHAN(chan) | MASK_DISABLE);
+	outp(mask_port[chan], MASK_CHAN(chan) | MASK_DISABLE);
 }
 
 static __inline void unmask(int chan)
 {
-	outp(DMA_MASK(chan), MASK_CHAN(chan));
+	outp(mask_port[chan], MASK_CHAN(chan));
 }
