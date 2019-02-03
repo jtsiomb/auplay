@@ -22,7 +22,7 @@ int main(int argc, char **argv)
 	if(audio_init() == -1) {
 		return 1;
 	}
-	audio_setvolume(AUDIO_MASTER, 255);
+	audio_setvolume(AUDIO_MASTER, vol);
 	audio_setvolume(AUDIO_PCM, 255);
 
 	for(i=1; i<argc; i++) {
@@ -32,7 +32,7 @@ int main(int argc, char **argv)
 					fprintf(stderr, "%s must be followed by a number 1-100\n", argv[-1]);
 					return 1;
 				}
-				audio_setvolume(AUDIO_MASTER, vol * 255 / 100);
+				audio_setvolume(AUDIO_DEFAULT, vol * 255 / 100);
 
 			} else if(strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "-help") == 0) {
 				print_usage(argv[0]);
