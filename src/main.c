@@ -12,7 +12,7 @@ static int play_file(const char *fname);
 static int cbfunc(void *buf, int size, void *cls);
 static void print_usage(const char *argv0);
 
-static int vol = 220;
+static int vol = 255;
 static int quit;
 
 int main(int argc, char **argv)
@@ -22,7 +22,7 @@ int main(int argc, char **argv)
 	if(audio_init() == -1) {
 		return 1;
 	}
-	audio_setvolume(AUDIO_MASTER, vol);
+	audio_setvolume(AUDIO_MASTER, 255);
 	audio_setvolume(AUDIO_PCM, 255);
 
 	for(i=1; i<argc; i++) {

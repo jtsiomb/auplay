@@ -42,6 +42,7 @@ void dma_in(int chan, uint32_t phyaddr, int size, unsigned int flags)
 static void dma_io(int chan, uint32_t phyaddr, int size, unsigned int flags, unsigned int dir)
 {
 	unsigned int mode;
+	unsigned char page;
 
 	mask(chan);
 	outp(clrff_port[chan], 0);
@@ -52,6 +53,8 @@ static void dma_io(int chan, uint32_t phyaddr, int size, unsigned int flags, uns
 	if(flags & DMA_AUTO) mode |= MODE_AUTO;
 	outp(mode_port[chan], mode);
 
+	page = (phyaddr >> 16) & 0xff;
+
 	if(IS_16BIT(chan)) {
 		phyaddr >>= 1;
 		size >>= 1;
@@ -59,7 +62,7 @@ static void dma_io(int chan, uint32_t phyaddr, int size, unsigned int flags, uns
 
 	outp(addr_port[chan], phyaddr & 0xff);
 	outp(addr_port[chan], (phyaddr >> 8) & 0xff);
-	outp(page_port[chan], (phyaddr >> 16) & 0xff);
+	outp(page_port[chan], page);
 
 	size--;
 	outp(count_port[chan], size & 0xff);
