@@ -224,16 +224,12 @@ static void start(int rate, int bits, int nchan)
 			return;
 		}
 
-		printf("DBG allocated seg: %x, addr: %lx\n", (unsigned int)seg,
-				(unsigned long)seg << 4);
-
 		addr = (uint32_t)seg << 4;
 		next64k = (addr + 0x10000) & 0xffff0000;
 		if(next64k - addr < BUFSIZE) {
 			addr = next64k;
 		}
 
-		printf("DBG aligned: %lx (mid: %lx)\n", (unsigned long)addr, (unsigned long)(addr + BUFSIZE / 2));
 		buffer[0] = (void*)addr;
 		buffer[1] = (void*)(addr + BUFSIZE / 2);
 		wrbuf = 0;

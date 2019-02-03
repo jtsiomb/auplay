@@ -90,7 +90,7 @@ static int play_file(const char *fname)
 				paused = !paused;
 				if(paused) {
 					audio_pause();
-					printf("pause\n");
+					printf("\npause\n");
 				} else {
 					audio_resume();
 					printf("resume\n");
@@ -101,14 +101,14 @@ static int play_file(const char *fname)
 				vol += 32;
 				if(vol > 255) vol = 255;
 				audio_setvolume(AUDIO_DEFAULT, vol);
-				printf("volume: %d%%\n", 101 * vol / 256);
+				printf("\nvolume: %d%%\n", 101 * vol / 256);
 				break;
 
 			case '-':
 				vol -= 32;
 				if(vol < 0) vol = 0;
 				audio_setvolume(AUDIO_DEFAULT, vol);
-				printf("volume: %d%%\n", 101 * vol / 256);
+				printf("\nvolume: %d%%\n", 101 * vol / 256);
 				break;
 
 			case 'm':
@@ -130,7 +130,8 @@ static int play_file(const char *fname)
 			prev = dbg_cur_offs;
 			_enable();
 
-			printf("%3d%% - offs: %lu/%lu\n", 100 * prev / au->size, prev, au->size);
+			printf("%3d%% - offs: %lu/%lu       \r", 100 * prev / au->size, prev, au->size);
+			fflush(stdout);
 		} else {
 			_enable();
 		}
@@ -138,6 +139,7 @@ static int play_file(const char *fname)
 	}
 
 end:
+	putchar('\n');
 	au_close(au);
 #ifdef DBG_PRELOAD
 	free(dbg_samples);
