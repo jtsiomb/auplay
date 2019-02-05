@@ -27,6 +27,7 @@
 #define DSP_RATE			0x40
 #define DSP4_OUT_RATE		0x41
 #define DSP4_IN_RATE		0x42
+#define DSP_BLOCKSZ			0x48
 #define DSP_GET_VER			0xe1
 
 /* start DMA playback/recording. combine with fifo/auto/input flags */
@@ -61,6 +62,8 @@
 #define MIX_SB16_MASTER_R	0x31
 #define MIX_SB16_VOICE_L	0x32
 #define MIX_SB16_VOICE_R	0x33
+
+#define MIX_SBPRO_STEREO	0x0e
 #define MIX_SB16_IRQ_SEL	0x80
 #define MIX_SB16_DMA_SEL	0x81
 #define MIX_SB16_INTSTAT	0x82
@@ -78,7 +81,6 @@
 
 static int reset_dsp(void);
 static void *sb_buffer(int *size);
-static void set_output_rate(int rate);
 static void start(int rate, int bits, int nchan);
 static void pause(void);
 static void cont(void);
@@ -87,9 +89,10 @@ static int isplaying(void);
 static void setvolume(int ctl, int vol);
 static int getvolume(int ctl);
 
+static void set_sbpro_stereo(void);
+static int start_dsp4(int rate, int bits, unsigned int mode, int num_samples);
+static int start_dsp(int rate, int nchan, int num_samples);
 static void INTERRUPT intr_handler();
-static void start_dsp4(int bits, unsigned int mode, int num_samples);
-static void start_dsp(int nchan, int num_samples);
 static void write_dsp(unsigned char val);
 static unsigned char read_dsp(void);
 static void write_mix(int reg, unsigned char val);
@@ -114,13 +117,12 @@ static const struct audrv sbdrv = {
 
 static int base_port;
 static int irq, dma_chan, dma16_chan, dsp_ver;
-static int dsp4;
 
 static void *buffer[2];
 static volatile int wrbuf;
 
 static volatile int playing;
-static int cur_bits, cur_mode, auto_init;
+static int cur_bits, auto_init, high_speed;
 
 static void (INTERRUPT *prev_intr_handler)();
 
@@ -135,7 +137,6 @@ int sb_detect(struct audrv *drv)
 		if(sscanf(env, "A%x I%d D%d H%d", &base_port, &irq, &dma_chan, &dma16_chan) >= 3) {
 			if(reset_dsp() == 0) {
 				dsp_ver = get_dsp_version();
-				dsp4 = VER_MAJOR(dsp_ver) >= 4 ? 1 : 0;
 				print_dsp_info();
 				*drv = sbdrv;
 				return 1;
@@ -149,9 +150,8 @@ int sb_detect(struct audrv *drv)
 		base_port = 0x200 + ((i + 1) << 4);
 		if(reset_dsp() == 0) {
 			dsp_ver = get_dsp_version();
-			dsp4 = VER_MAJOR(dsp_ver) >= 4 ? 1 : 0;
 
-			if(dsp4) {
+			if(dsp_ver >= 0x400) {
 				if(dsp4_detect_irq() == -1) {
 					printf("sb_detect: failed to configure IRQ\n");
 					return 0;
@@ -198,24 +198,11 @@ static int reset_dsp(void)
 	return -1;
 }
 
-static void set_output_rate(int rate)
-{
-	if(dsp4) {
-		write_dsp(DSP4_OUT_RATE);
-		write_dsp(rate >> 8);
-		write_dsp(rate & 0xff);
-	} else {
-		int tcon = 256 - 1000000 / rate;
-		write_dsp(DSP_RATE);
-		write_dsp(tcon);
-	}
-}
-
 static void start(int rate, int bits, int nchan)
 {
 	uint16_t seg, pmsel;
 	uint32_t addr, next64k;
-	int size, num_samples;
+	int size, mode, num_samples, dsp_num_samples;
 
 	if(!buffer[1]) {
 		/* allocate a buffer in low memory that doesn't cross 64k boundaries */
@@ -235,22 +222,28 @@ static void start(int rate, int bits, int nchan)
 		wrbuf = 0;
 	}
 
-	/* Auto-init playback mode:
-	 * fill the whole buffer with data, program the DMA for BUFSIZE transfer,
-	 * and program the DSP for BUFSIZE/2 transfer. We'll get an interrupt in the
-	 * middle, while the DSP uses the upper half, and we'll refill the bottom half.
-	 * Then continue ping-ponging the two halves of the buffer until we run out of
-	 * data.
-	 */
-	auto_init = 1;
 
-	/* TODO: if size <= BUFSIZE, do a single transfer instead */
 	wrbuf = 0;
 	if(!(size = audio_callback(buffer[wrbuf], BUFSIZE))) {
 		return;
 	}
 	addr = (uint32_t)buffer[wrbuf];
 	num_samples = bits == 8 ? size : size / 2;
+
+	if(size < BUFSIZE) {
+		auto_init = 0;	/* single transfer mode */
+		dsp_num_samples = num_samples;
+	} else {
+		/* Auto-init playback mode:
+		 * fill the whole buffer with data, program the DMA for BUFSIZE transfer,
+		 * and program the DSP for BUFSIZE/2 transfer. We'll get an interrupt in the
+		 * middle, while the DSP uses the upper half, and we'll refill the bottom half.
+		 * Then continue ping-ponging the two halves of the buffer until we run out of
+		 * data.
+		 */
+		auto_init = 1;
+		dsp_num_samples = num_samples / 2;
+	}
 
 	_disable();
 	if(!prev_intr_handler) {
@@ -262,35 +255,23 @@ static void start(int rate, int bits, int nchan)
 	unmask_irq(irq);
 
 	cur_bits = bits;
-	cur_mode = bits == 8 ? 0 : DSP4_MODE_SIGNED;
-	if(nchan > 1) {
-		cur_mode |= DSP4_MODE_STEREO;
-	}
 
 	write_dsp(DSP_ENABLE_OUTPUT);
-	dma_out(cur_bits == 8 ? dma_chan : dma16_chan, addr, BUFSIZE, DMA_SINGLE | DMA_AUTO);
-	set_output_rate(rate);
-	start_dsp4(cur_bits, cur_mode, num_samples / 2);
+	dma_out(cur_bits == 8 ? dma_chan : dma16_chan, addr, BUFSIZE, DMA_SINGLE | auto_init ? DMA_AUTO : 0);
+
+	if(dsp_ver >= 0x400) {
+		int mode = bits == 8 ? 0 : DSP4_MODE_SIGNED;
+		if(nchan > 1) {
+			mode |= DSP4_MODE_STEREO;
+		}
+		start_dsp4(rate, cur_bits, mode, dsp_num_samples);
+	} else {
+		if(nchan > 1 && dsp_ver >= 0x300) {
+			set_sbpro_stereo();
+		}
+		start_dsp(rate, cur_bits, dsp_num_samples);
+	}
 	playing = 1;
-}
-
-static void start_dsp4(int bits, unsigned int mode, int num_samples)
-{
-	unsigned char cmd = bits == 8 ? DSP4_START_DMA8 : DSP4_START_DMA16;
-	cmd |= DSP4_AUTO | DSP4_FIFO;
-
-	/* program the DSP to start the DMA transfer */
-	write_dsp(cmd);
-	write_dsp(mode);
-	num_samples--;
-	write_dsp(num_samples & 0xff);
-	write_dsp((num_samples >> 8) & 0xff);
-}
-
-static void start_dsp(int nchan, int num_samples)
-{
-	/* program the DSP to start the DMA transfer */
-	/* TODO */
 }
 
 static void pause(void)
@@ -365,7 +346,7 @@ static int getvolume(int ctl)
 	int left, right;
 	unsigned char val;
 
-	if(VER_MAJOR(dsp_ver) >= 4) {
+	if(dsp_ver >= 0x400) {
 		/* DSP 4.x - SB16 */
 		int lreg, rreg;
 		if(ctl == AUDIO_PCM) {
@@ -381,7 +362,7 @@ static int getvolume(int ctl)
 		val = read_mix(rreg);
 		right = (val & 0xf8) | (val >> 5);
 
-	} else if(VER_MAJOR(dsp_ver) >= 3) {
+	} else if(dsp_ver >= 0x300) {
 		/* DSP 3.x - SBPro */
 		val = read_mix(ctl == AUDIO_PCM ? MIX_SBPRO_VOICE : MIX_SBPRO_MASTER);
 
@@ -408,6 +389,55 @@ static int getvolume(int ctl)
 
 	return (left + right) >> 1;
 }
+
+static void set_sbpro_stereo(void)
+{
+}
+
+static int start_dsp4(int rate, int bits, unsigned int mode, int num_samples)
+{
+	unsigned char cmd = bits == 8 ? DSP4_START_DMA8 : DSP4_START_DMA16;
+	if(auto_init) {
+		cmd |= DSP4_AUTO | DSP4_FIFO;
+	}
+
+	/* set output rate */
+	write_dsp(DSP4_OUT_RATE);
+	write_dsp(rate >> 8);
+	write_dsp(rate & 0xff);
+
+	/* program the DSP to start the DMA transfer */
+	write_dsp(cmd);
+	write_dsp(mode);
+	num_samples--;
+	write_dsp(num_samples & 0xff);
+	write_dsp((num_samples >> 8) & 0xff);
+
+	return 0;
+}
+
+static int start_dsp(int rate, int nchan, int num_samples)
+{
+	/* set time constant */
+	int tcon = 256 - 1000000 / rate;
+	write_dsp(DSP_RATE);
+	write_dsp(tcon);
+
+	if(nchan > 1) {
+		/* stereo */
+		if(dsp_ver < 0x300) return -1;	/* need a sb pro for stereo */
+
+		set_sbpro_stereo();
+		high_speed = rate >= 11025;
+	} else {
+		/* mono */
+		high_speed = rate >= 23000;
+	}
+
+	/* program the DSP to start the DMA transfer */
+	return -1;	/* TODO */
+}
+
 
 static void INTERRUPT intr_handler()
 {
